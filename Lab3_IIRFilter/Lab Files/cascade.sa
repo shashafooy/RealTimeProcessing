@@ -1,0 +1,50 @@
+	.title "cascade.sa"
+	.def _cascade
+	.sect ".cascade"
+	.global _cascade
+	.global _cascadeSection
+	.global _filterSections
+	.global _dBuff
+	.global _dOffset
+	.global _sections
+
+_cascade: .proc A4, B3 ;cascade(x(n))
+	.reg x, filter, dBuff, dOffset, sections, p_filter, p_dBuff, i, count, product, result, gain
+
+	;move globals into registers
+	mvk 0, i
+	mv A4, x
+	mvkl _dBuff, dBuff
+	mvkh _dBuff, dBuff
+	mvkl _filterSections, filter
+	mvkh _filterSections, filter
+	mvkl _dOffset, dOffset
+	mvkh _dOffset, dOffset
+	mvkl _sections, sections
+	mvkh _sections, sections
+
+	ldw *dOffset, dOffset
+	ldw *sections, sections
+
+
+;loop over every section for cascade
+loop:
+	mpy i, 4, count ;[i][4]
+	addaw dBuff, count, p_dBuff ;&dBuff[i][0]
+	mpy i,7,count ;[i][7]
+	addaw filter, count, p_filter ;&filterSections[i][0]
+	.call x = _cascadeSection(x,p_dBuff,dOffset,p_filter)	;get output of single section
+	add i, 1, i
+	sub i, sections, count
+[count] b loop
+
+	;apply output gain
+	mpy sections, 7, count ;[i][sections]
+	addaw filter, count, p_filter ;obtain address of output gain
+ 	ldw *p_filter, gain ;load the output gain
+ 	mpysp x, gain, x
+
+ 	mv x, A4 ;return result
+ 	.endproc A4, B3
+ 	b B3
+ 	nop 5

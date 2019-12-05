@@ -1,0 +1,141 @@
+	.title "adaptive.sa"
+	.def _adaptiveFilter
+	.def _init
+	.sect ".adaptive"
+	.global _adaptiveFilter
+	.global _init
+	.global _xBuff
+	.global _filter
+	.global _error
+	.global _p_xBuff
+_xBuff	.usect "arraySect", 1024, 4 ;allocate space for xBuffFilter[256*2]
+_filter .usect "arraySect", 1024, 4 ;allocate space for filter[256]
+
+_init: .proc A4,B5:B4,B3 ;void init(int size,float beta);
+	.reg temp, val
+	.reserve A9,A11,A13
+	mvkl _xBuff,A5
+	mvkh _xBuff,A5 ;starting xBuff address
+	mvkl _filter,A7
+	mvkh _filter,A7 ;starting filter address
+	mvkl _error, A13
+	mvkh _error, A13 ;float *error
+	mv A4, A9 ;buffer size
+	mv B5, A11 ;beta high
+	mv B4, A10 ;beta low
+	;mv A6, A13 ;error address
+	ldw *A13,A13
+	;AMR circular buffer setup
+	mvkl 0x1<<4|0x1<<12, temp ;A6,B6
+	mvkh 0x9<<16, temp ;%256*wordSize=1024
+	mvc temp, AMR;
+
+	;lsubaw A9, 2, val ;bufferSize-2
+	;addaw A7,1,A7 ;filter[size-1],
+
+	.endproc B3
+	b B3
+	nop 5
+
+
+_adaptiveFilter: .proc A4, B4, A6, B6, A8, B3 ;float adaptiveFilter(float x,float d,float* xBuff,float* filter)
+	.circ xBuff/A6, filter/B6
+	.map size/A9, beta0/A10, beta1/A11, error/A13
+	.reserve A5,A7,A9,A13
+	.reg count,val,product1:product0,product,betaErr1:betaErr0, temp1:temp0, x0,x1,h0,h1,y, d,oldx, p_offset, p_temp
+	.no_mdep
+	.mdep ld1,st1
+
+	mv A4, x0
+	mv B4, d
+	mv A8, p_offset
+	mvk 255, size
+	ldw *p_offset, val
+	add xBuff, val, xBuff ;xBuff + circular offset
+
+	ldw *xBuff, oldx ;hold onto oldest x for computing filter
+	stw x0,*xBuff-- ;might need to be preincremented
+	mvk 0, y
+	mpyspdp error,beta1:beta0,betaErr1:betaErr0
+
+	;mv size,count
+	mvk 256, count
+	sub count,1,count ;size-1
+Loop: .trip 255	;for(i=0; M<SIZE-1;i++)
+	;update filter h(M)=h(M)+B*e*x(M)
+	ldw *xBuff--, x1 ;x[n]
+	ldw *filter, h0 ;h[n]
+	mpyspdp x1,betaErr1:betaErr0,product1:product0 ;B*e*x(M)
+	dpsp product1:product0, product
+	addsp h0, product, h0 ;h+B*e*x=hnew
+	stw h0, *filter++
+	;compute h(m)*x(m)
+	mpysp x0,h0,val ;h(m)*x(m)
+	addsp val,y,y
+	mv x1, x0
+[count] sub count, 1, count
+[count] b Loop
+
+	;update h255
+	mpyspdp oldx,betaErr1:betaErr0,product1:product0 ;B*e*x(M)
+	dpsp product1:product0, product
+	ldw *filter, h0 ;h(M),
+	addsp h0, product, h0 ;h+B*e*x=h
+	stw h0, *filter++ ;should reset to filter(0)
+	;x(0)*h(0)
+	addaw xBuff, 1, xBuff ;xBuff currently at beginning location, increment by 1 for next iteration
+	mpysp x0, h0,val ;x(0)*h(0)
+	addsp val,y,y	;y+=h*x
+
+
+
+	mvkl _xBuff,val
+	mvkh _xBuff,val
+	sub xBuff, val, val ;get xBuff offset
+	stw val, *p_offset
+
+
+	subsp d, y, error
+	mv error, A4 ;return error
+
+	.endproc A4, A5, A7, A6, B3
+	b B3
+ 	nop 5
+
+
+;	mv size,count
+;	shr count,1,count ;divide by 2
+;	sub count,1,count ;size/2-1
+;Loop: .trip 127	;for(M=size/2-1; M>0;M--)
+;	;update filter
+;	ldw *xBuff++, x1 ;x[count]
+;	ldw *xBuff++, x2 ;cannot use lddw as xBuff is not always aligned on 0 or 8 boundry
+;	lddw *filter++{ld1}, h2:h1 ;load h(M), h(M+1), move *filter(M-1)
+;	addaw filter,1,filter ;filter++
+;	mpysp betaErr,x1,product ;B*e*x(M)
+;	addsp h1,product,h1;hnew(n+1)=h+B*e*x
+;	mpysp betaErr,x2,product
+;	addsp h2,product,h2;hnew(n)=h+B*e*x
+;
+;	stdw h2:h1, *filter{st1} ;store new filter values
+;	addaw filter, 3, filter ;filter+=3
+;
+;	;compute h(m)*x(m)
+;	mpysp x1,h1,val ;h(m)*x(m)
+;	addsp h1,y,y
+;	mpysp x2,h2,val ;h(m)*x(m)
+;	addsp h2,y,y
+;[count]	sub count, 1, count
+;[count] b Loop
+;	; compute new h(1) and final 2 y value accumulations
+;	ldw *filter--, h1 ; load h(0)
+;	ldw *xBuff++, x1  ; load x(1) which was x(0) in last iteration
+;	mpysp betaErr,x1,product ;B*e*x(M)
+;	addsp h1,product,h1;hnew(1)=h(0)+B*e*x(0)
+;	stw h1, *filter++[2] ;store newH(1), reset to beginning of filter buffer
+;	mpysp x1,h1,val ;h(1)*x(1)
+;	addsp val,y,y
+;
+;	ldw *xBuff++, x2
+;	;h(0) = 1 always h(0)*x(0)=x(0)
+;	addsp x2,y,y

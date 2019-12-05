@@ -1,0 +1,54 @@
+	.title "cascadeSection.sa"
+	.def _cascadeSection
+	.sect ".cascade"
+	.global _cascadeSection
+
+_cascadeSection: .proc A4, B4, A6, B6 ;cascadeSection(x(n),*dBuff(n=0),dOffset,filterCoef)
+	.reg x, dBuff, filter, p_a, p_b, a, b, d, product, dresult, yresult, count, dOffset, gain
+	mvkl 0x3<<16|0x1<<8, count
+	mvkh 0x3<<16|0x1<<8, count
+	mvc count,AMR		;make B4 a circular buffer of size 16(4*wordSize)
+	;move parameters into local registers
+	mv A4, x
+	mv B6, filter
+	mv A6, dOffset
+	mvk 0,yresult
+
+	addaw filter, 4, p_a ;a0 address 4*wordLength
+	addaw filter, 1, p_b ;b0 address 1*wordLength
+	addaw B4, dOffset, B4 ;shift D to d(0) in circular buffer
+	mv B4, dBuff ;store initial d(0) location
+
+	;init d_k to x_k
+	ldw *p_a++, a ;load a0;
+	mpysp x,a, dresult ;x(n)*a0
+	addaw p_b,1,p_b
+	mvk 2, count
+	;compute a,b*d_k
+
+dLoop: ;i=1;i<3;i++
+	ldw *p_a++, a	;a(i)
+	ldw *++B4, d	;d(n-i)
+	ldw *p_b++, b	;b(i)
+	mpysp d,a, product ;d(n-i)*a(i)
+	subsp dresult,product,dresult
+
+	mpysp d,b,product	;d(n-i)*b(i)
+	addsp product,yresult,yresult
+	sub count, 1, count
+[count] b dLoop
+
+	;store d[0], calculate y+=d[0]*b[0]
+	stw dresult, *dBuff ;store d[0]
+	ldw *+filter[1],b ;get b0
+	mpysp dresult, b, product ;d[0]*b[0]
+	addsp product, yresult,yresult
+
+	;output gain
+	ldw *filter,  gain
+	mpysp yresult, gain, yresult ;y*gain
+	mv yresult, A4 ;return y
+
+	.endproc A4, B3
+	b B3
+	nop 5

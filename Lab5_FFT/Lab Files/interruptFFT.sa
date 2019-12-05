@@ -1,0 +1,125 @@
+	.title "interruptFFT.sa"
+	.def _interruptFFT
+	.sect ".interrupts"
+	.global _input_sample
+	.global _input_right_sample
+	.global _output_sample
+	.global _cfftr2_dit
+	.global _bitrev
+	.global _xBuff
+	.global _w
+	.global _index
+	.global _i
+	.bss _scalar,4,4							;assembly global
+
+_xBuff	.usect "arraySect", 8192, 4 			;allocate space for xBuff[1024*2]
+_w		.usect "arraySect", 4096, 4 			;extern float w[1024];
+_index	.usect "arraySect", 4096, 4 			;extern short index[1024];
+_interruptFFT	.proc B3
+	.reg inputLR, sample, outputLR, xBuff, w, index, p_i, i, j, N, boolVal, mask, max, cnt
+	.reg real, imag, max16, scalar, p_scalar, constants, temp, leftChan, rightChan
+
+	mvkl _xBuff, xBuff
+	mvkh _xBuff, xBuff
+	mvkl _w, w
+	mvkh _w, w
+	mvkl _index, index
+	mvkh _index, index
+	mvkl _i, p_i
+	mvkh _i, p_i
+	mvkl _scalar, p_scalar
+	mvkh _scalar, p_scalar
+	mvk 1024, N
+
+	ldw *p_i,i
+
+	.call inputLR = _input_sample() 			;obtain 2 int_16
+
+	mvkl 0x0000FFFF, mask						;mast upper 16 bits
+	mvkh 0x0000FFFF, mask
+	AND mask, inputLR, rightChan				;right channel (data)
+	intsp rightChan, sample
+	stw sample, *+xBuff[i]
+	add i,1,i
+
+	shru inputLR, 16, leftChan 					;shift upper 16 bits
+	intsp leftChan, sample
+	mvk 0, sample
+	stw sample, *+xBuff[i]						;left channel (0)
+	add i,1,i
+
+	mvk 0x800, temp
+	cmpeq temp,i, boolVal
+[!boolVal] b Skip_FFTLogic 						;branch if i!=N
+	mvk 0, i
+	mvk 0x1, mask
+	NOT mask, mask
+	mvc CSR, temp
+	AND temp, mask, temp						;diable GIE
+	mvc temp, CSR								;may not be needed
+
+	mvk 1, cnt
+LoopFFT:
+
+	.call _cfftr2_dit(xBuff, w, N)				;compute FFT
+	sub cnt, 1, cnt
+[cnt] b LoopFFT									;used to check how many ffts can be run
+	.call _bitrev(xBuff, index, N)				;bit reverse the output
+
+	mvk 0, max
+	mvk 512, cnt
+for1: .trip 512
+	ldw *xBuff, real							;***could have used lddw
+	ldw *+xBuff[1], imag
+	mpysp real, real, real
+	mpysp imag, imag, imag						;compute the square magnitude
+	addsp imag, real, real						;real^2+imag^2
+	mvk 512, temp
+	stw real, *+xBuff[N]						;store magnitude into x
+	stw real, *xBuff++[2]						;store into 2nd half of x
+	cmpltsp max, real, boolVal
+[boolVal] mv real, max 							;if(max<xBuff[j]) max=xBuff[j]
+[cnt]	sub cnt, 1, cnt
+[cnt]	b for1
+	subaw xBuff, N, xBuff						;set back to xBuff[0]
+
+	mvk 1, scalar
+	intsp scalar, scalar ;1.0f
+	mvkh 0x47800000, max16						;constant for 2^16
+	cmpgtsp max, max16, boolVal
+[!boolVal] b skipScalar
+	mvkl 0x47000000, constants					;float 0.5*2^16
+	mvkh 0x47000000, constants
+	rcpsp max, max								;1/max
+	mpysp constants, max, scalar				;compute scalar
+
+skipScalar:
+
+	stw scalar, *p_scalar						;store for later interrupts
+
+Skip_FFTLogic:
+
+	ldw *+xBuff[i], leftChan					;get the magnitude
+	ldw *p_scalar, scalar						;get the scalar
+	mpysp leftChan, scalar, leftChan 			;scale output
+
+	spint leftChan, leftChan 					;float to int
+
+	mvk 0x3FF, mask
+	AND i, mask, temp 							;i%1024
+	mvk 200, constants
+	cmplt temp, constants, boolVal				;if(i%1024>200)
+[boolVal] mvk 25000, rightChan					;if
+||[!boolVal] mvk 0, rightChan					;else
+	pack2 leftChan,rightChan, sample			;lower 16 bits get combined into 21 bits
+	.call _output_sample(sample)				;output sample
+
+	stw i, *p_i									;store i
+	mvk 0x1, mask								;enable interrupt
+	mvc CSR, temp
+	OR temp, mask, temp
+	mvc temp, CSR
+
+	.endproc B3
+	b B3
+	nop 5

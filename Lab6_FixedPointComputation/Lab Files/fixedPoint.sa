@@ -1,0 +1,56 @@
+	.title "fixedPoint.sa"
+	.def _float2Fixed
+	.sect ".fixed"
+
+***************************************
+*	converts a floating point number to a
+*	fixed point signed number
+*	@param floatNum: floating point number to convert
+*	@param bits: number of bits for the desired fixed point number
+*		(bits includes the sign bit)
+*	@param maxval: max value used to scale the output
+***************************************
+_float2Fixed .cproc floatNum, bits, maxVal		;int32 float2Fixed(float num, int bits, float max)
+	.reg floatTemp, float1, n, boolVal, div2, npow, temp, mask
+
+	mvkl 0x3f800000, float1							;float 1.0f
+	mvkh 0x3f800000, float1
+	mvk 31, n										;number to shift by (2^n)
+	mvk 2, div2
+	intsp div2, div2
+	;TODO check if need mvkh and mvkl for n/div2
+	rcpsp div2, div2							;float 1.0f/2
+
+													;find the 2^-n value to scale below 1
+GTOneLoop:
+	cmpgtsp maxVal, float1, boolVal					;divides float by 2 until less than 1
+[boolVal]	sub n, 1, n								;decrement n until max<1.0f
+[boolVal]	mpysp maxVal, div2, maxVal
+[boolVal]	b GTOneLoop
+
+	;multiply by 2^(31-n) where n causes scaling
+	sub n, 1, n										;exponent format E=0b1001 1110 for 2^31
+	mvk 0x80, temp								;0b1000 0000
+	OR n, temp, n									;get into required exponent format
+	shl n, 23, npow									;shift n into exponent of float
+	mpysp floatNum, npow, floatNum					;mpy 2^(31-n) where n makes result < 1
+
+	;add 2^(31-b)
+	mvk 0x9E, n										;exponent format 0b0 1001 1110 (float 2^31)
+	add bits, 1, bits								;add to include sign bit
+	sub n, bits, n									;31-b
+	shl n, 23, n									;shift n into exponent of float
+	addsp floatNum, n, floatNum						;add 2^(31-b)
+	spint floatNum, floatNum						;convert to int
+
+	;mask the (32-b) LSBs to 0
+	mvkl 0xFFFFFFFF, mask
+	mvkh 0xFFFFFFFF, mask
+	mvk 32, n
+	sub n,bits,bits
+	shl mask, bits, mask							;mask has b+1(signed) zeros in LSB							;shift by extra 1 to account for sign bit
+	AND floatNum, mask, floatNum					;set lower b+1 bits to 0
+
+	.return floatNum
+	.endproc
+

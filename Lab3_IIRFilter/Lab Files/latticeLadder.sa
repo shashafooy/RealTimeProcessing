@@ -1,0 +1,63 @@
+
+	.title "latticeLadder.sa"
+	.def _latticeLadder
+	.sect ".lattice"
+	.global _latticeLadder
+	.global _filterLength
+	.global _kVal
+	.global _vVal
+	.global _gOld
+
+
+_latticeLadder: .proc A4,B3 ;latticeLadder(x(n))
+	.reg fVal,vNew, gNew, p_gOld, gOld, p_vBuff, vVal, p_kBuff, kVal, i, m, pointer, product, output
+
+	;move into local registers
+	mv A4,fVal
+	mvkl _filterLength, m
+	mvkh _filterLength, m
+	ldw *m,m
+	mvkl _kVal, p_kBuff
+	mvkh _kVal, p_kBuff
+	mvkl _vVal, p_vBuff
+	mvkh _vVal, p_vBuff
+	mvkl _gOld, p_gOld
+	mvkh _gOld, p_gOld
+	mvk 0,output
+
+
+	sub m,1,m ;filter_size-1,for 0 index
+loop:
+	;load array values
+	ldw *+p_kBuff[m], kVal ;k_m
+	ldw *+p_vBuff[m], vVal ;v_m
+	sub m,1,m ;used for g_m-1
+	ldw *+p_gOld[m], gOld ;g_m-1
+
+	;compute f_m-1
+	mpysp kVal,gOld,product
+	subsp fVal,product,fVal ;f_m-1=f_m(n)-k_m*g_m-1(n-1)
+
+	;compute g_m
+	mpysp kVal,fVal,product
+	addsp product,gOld,gNew ;g_m=k_m*f_m-1(n)+g_m-1(n-1)
+
+	;compute v_m
+	mpysp vVal,gNew,product
+	addsp product,output,output ;y+=g_m*v_m
+
+	;store gOld=gNew
+	add m,1,product
+	stw gNew,*+p_gOld[product] ;gOld[m+1]=gNew
+[m]	b loop
+
+	stw fVal,*p_gOld ;gOld[0]=f0
+	;compute final f*v0+vOld
+	ldw *p_vBuff, vVal ;v0
+	mpysp vVal,fVal,product
+	addsp product,output, output ;output+=f0*v0
+	mv output, A4
+
+	.endproc A4, B3
+	b B3
+	nop 5

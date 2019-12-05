@@ -1,0 +1,1 @@
+"./67-cfftr2.obj" "./bitrevf.obj" "./Lab Files/L138_aic3106_init.obj" "./Lab Files/interruptFFT.obj" "./Lab Files/template2.obj" "./Lab Files/vectors_intr.obj" "../linker_dsp.cmd" -llibc.a -l"C:/Users/Public/Documents/dsp_bsl/lib/evmomapl138_bsl.lib" 
